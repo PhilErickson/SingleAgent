@@ -50,18 +50,16 @@ def valIter(params, stateMax, stateInt, stateNum):
     P = params[-stateNum:] # Transition matrix
     P = diags(P, list(xrange(stateNum)), shape = (K, K)).todense()
     P = P.T
-    #r = np.linspace(0, stateMax, (stateMax / stateInt)) # state variable
     r = np.array(list(xrange(K)))
     guess = np.zeros((2, K))
     EV = guess
     EVTemp = np.zeros((2, K))
     tol = 1e-6; maxIter = 1000; dif = 1; iterNum = 0 # Iteration bounds
     while dif > tol and iterNum < maxIter:
-        EV1 = valInner(r, params, beta, EV, 0)
-        EV2 = valInner(r, params, beta, EV, 1)
+        EV1 = valInner(r, flowParams, beta, EV, 0)
+        EV2 = valInner(r, flowParams, beta, EV, 1)
         EVTemp = np.vstack((EV1, EV2))
         EVTemp = np.dot(EVTemp, P)
-        #EVTemp[1, :] = EVTemp[1, 0]
         # Correct for end of value function
         EVTemp[:, -stateNum:] = np.tile(EVTemp[:, -(stateNum + 1)], 
                                         (1, stateNum))
@@ -71,4 +69,7 @@ def valIter(params, stateMax, stateInt, stateNum):
     return EV
 
 #def rustSim(params, stateMax, stateInt, stateNum):
+#    # Simulate Rust data
+#    beta = params[0]
+#    flowParams = params[1:-stateNum]
     
