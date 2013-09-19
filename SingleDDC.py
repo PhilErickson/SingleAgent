@@ -1,7 +1,8 @@
 '''
     File        : SingleDDC.py
     Author      : Philip J. Erickson
-    Date        : September 18, 2013
+    Date        : F - September 10, 2013
+                  C - September 19, 2013
     Description : Program for estimating Single Agent DDC models using:
                     - Rust NFP algorithm (Rust 87)
                     - Hotz and Miller CCP method (Hotz and Miller 93)
@@ -10,6 +11,7 @@
 import pandas as pd
 import numpy as np
 from scipy.sparse import diags
+from scipy.optimize import minimize
 
 
 def u_flow(y, j, params):
@@ -84,12 +86,12 @@ def x_set(x, p):
         count += 1
     return (count - 1)  # Control for precision error on complimentary prob.
 
-def replace(params, stateMax, stateInt, stateNum, n, t, x, eps):
-    ''' Generate replacement decisions '''
+def decision(params, stateMax, stateInt, stateNum, n, t, x, eps):
+    ''' Generate stopping decisions '''
     obsNum = 0
     action = []
     xOut = []
-    EV = valIter(params, stateMax, stateInt, stateNum)
+    EV = val_iter(params, stateMax, stateInt, stateNum)
     for i in range(0, n):
         xCum = 0
         for j in range(0, t):
@@ -105,6 +107,7 @@ def replace(params, stateMax, stateInt, stateNum, n, t, x, eps):
             xOut.append(xCum)
             obsNum += 1
     return np.array([xOut, action]).T
+
 
 def rust_sim(params, stateMax, stateInt, stateNum, n, t):
     ''' Simulate Rust data '''
@@ -129,11 +132,72 @@ def rust_sim(params, stateMax, stateInt, stateNum, n, t):
     time = np.tile(time, (n, 1))
     time = time.reshape((obs, 1))
     
-    data = replace(params, stateMax, stateInt, stateNum, n, t, x, eps)
-    data = hstack((unit, time, data))
+    data = decision(params, stateMax, stateInt, stateNum, n, t, x, eps)
+    data = np.hstack((unit, time, data))
     cols = ['ident', 'time', 'x', 'i']
     data = pd.DataFrame(data, columns=cols)
     data.x = data.x * stateInt
     return data
+    
+
+def first_step(dx, stateNum):
+    ''' Empirical frequencies for transition matrix '''
+    p = []
+    for i in range(0, stateNum):
+        pr = dx[dx == i].count() / float(len(dx))
+        p.append(pr)
+    return p
+
+
+def log_l(theta, b, dx, ident, EV):
+    ''' Log-likelihood function for NFP '''
+    dx[0] = 0
+    dx = dx.astype(np.int32)
+    EV1 = np.array(EV[ident, dx]).reshape(-1,)  # Take out of matrix form
+    EV2 = np.array(EV[(1 - ident), dx]).reshape(-1,)
+    
+    ll = (np.exp(u_flow(dx, ident, theta) + b*EV1) / 
+         (np.exp(u_flow(dx, ident, theta) + b*EV1) +
+          np.exp(u_flow(dx, (1 - ident), theta) + b*EV2)))
+    return -sum(ll)
+
+def curry_log_l(b, dx, ident, EV):
+    ''' Curry the log_l to avoid passing extra parameters through minimize '''
+    def curried(theta):
+        return log_l(theta, b, dx, ident, EV)
+    return curried
+
+def nfp(d, b, guess, stateMax, stateInt, stateNum):
+    ''' Rust's Nested Fixed Point algorithm '''
+    cols = ['ident', 'time', 'x', 'i']
+    d.columns = cols
+    di = d.i
+    dx = d.x 
+    dx = dx / stateInt
+    dt = d.time
+    theta = guess
+    
+    dx = dx.diff()
+    dx = dx * (1-di)
+    dx = dx * (dt != 0)    
+    p = first_step(dx, stateNum)
+    
+    tol = 1e-6; maxIter = 1000; dif = 1; iterNum = 0  # Iteration bounds
+    while dif > tol and iterNum < maxIter:
+        params = [[b], theta, p]
+        params = [item for sublist in params for item in sublist]
+        EV = val_iter(params, stateMax, stateInt, stateNum)
+        logL = curry_log_l(b, dx, d.i, EV)
+        result = minimize(logL, theta, method='nelder-mead')
+        thetaTemp = result.x
+        dif = max(thetaTemp - theta)
+        iterNum +=1
+        theta = thetaTemp
+    
+    result = [theta, p]
+    #result = [item for sublist in theta for item in sublist]
+    return result
+    
+# Now, maybe just use a better min. routine...?
     
     
