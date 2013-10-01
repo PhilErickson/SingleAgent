@@ -2,16 +2,17 @@
     File        : SingleDDC.py
     Author      : Philip J. Erickson
     Date        : F - September 10, 2013
-                  C - September 19, 2013
+                  C - October 1, 2013
     Description : Program for estimating Single Agent DDC models using:
                     - Rust NFP algorithm (Rust 87)
-                    - Hotz and Miller CCP method (Hotz and Miller 93)
+                    - Hotz and Miller CCP method (Hotz and Miller 93, 
+                      Aguirregabiria and Mira 02)
 '''
 
 import pandas as pd
 import numpy as np
 from scipy.sparse import diags
-from scipy.optimize import minimize
+from scipy.optimize import fmin_bfgs
 
 
 def u_flow(y, j, params):
@@ -32,11 +33,13 @@ def val_inner(y, params, beta, EV, replace):
 
 
 '''
-    Rust Values:
+    Rust Values and sim numbers:
     params = [.9999, 11.7257, 2.4569, 0.0937, 0.4475, 0.4459, 0.0127]
     stateMax = 400000
     stateInt = 2500
     stateNum = 4
+    t = 100
+    n = 100
 '''
 def val_iter(params, stateMax, stateInt, stateNum):
     '''
@@ -149,23 +152,18 @@ def first_step(dx, stateNum):
     return p
 
 
-def log_l(theta, b, dx, ident, EV):
+def log_l(theta, b, dx, i, EV):
     ''' Log-likelihood function for NFP '''
     dx[0] = 0
     dx = dx.astype(np.int32)
-    EV1 = np.array(EV[ident, dx]).reshape(-1,)  # Take out of matrix form
-    EV2 = np.array(EV[(1 - ident), dx]).reshape(-1,)
+    EV1 = np.array(EV[i, dx]).reshape(-1,)  # Take out of matrix form
+    EV2 = np.array(EV[(1 - i), dx]).reshape(-1,)
     
-    ll = (np.exp(u_flow(dx, ident, theta) + b*EV1) / 
-         (np.exp(u_flow(dx, ident, theta) + b*EV1) +
-          np.exp(u_flow(dx, (1 - ident), theta) + b*EV2)))
+    ll = (np.exp(u_flow(dx, i, theta) + b*EV1) / 
+         (np.exp(u_flow(dx, i, theta) + b*EV1) +
+          np.exp(u_flow(dx, (1 - i), theta) + b*EV2)))
     return -sum(ll)
 
-def curry_log_l(b, dx, ident, EV):
-    ''' Curry the log_l to avoid passing extra parameters through minimize '''
-    def curried(theta):
-        return log_l(theta, b, dx, ident, EV)
-    return curried
 
 def nfp(d, b, guess, stateMax, stateInt, stateNum):
     ''' Rust's Nested Fixed Point algorithm '''
@@ -182,22 +180,75 @@ def nfp(d, b, guess, stateMax, stateInt, stateNum):
     dx = dx * (dt != 0)    
     p = first_step(dx, stateNum)
     
-    tol = 1e-6; maxIter = 1000; dif = 1; iterNum = 0  # Iteration bounds
+    tol = 1e-8; maxIter = 1000; dif = 1; iterNum = 0  # Iteration bounds
     while dif > tol and iterNum < maxIter:
         params = [[b], theta, p]
         params = [item for sublist in params for item in sublist]
         EV = val_iter(params, stateMax, stateInt, stateNum)
-        logL = curry_log_l(b, dx, d.i, EV)
-        result = minimize(logL, theta, method='nelder-mead')
-        thetaTemp = result.x
-        dif = max(thetaTemp - theta)
+        result = fmin_bfgs(log_l, theta, args=(b, dx, d.i, EV), 
+                           maxiter=1, disp=0, full_output=True)
+        theta = result[0]
+        dif = max(abs(result[2]))  # Jacobian evaluated at parameters
         iterNum +=1
-        theta = thetaTemp
     
-    result = [theta, p]
-    #result = [item for sublist in theta for item in sublist]
+    result = [theta.tolist(), p]
+    result = [item for sublist in result for item in sublist]
     return result
     
-# Now, maybe just use a better min. routine...?
+
+def ccp_est(px, i, stateMax, stateInt):
+    ''' Get empirical CCP '''
+    V = np.zeros((stateMax / stateInt))
+    for state in np.unique(px):
+        mask = (px == state)
+        # Roll for replace in next period; also reset index with tolist()
+        mask = np.roll(np.array(mask.tolist()), 1, axis=0)
+        pr = sum(i[mask]) / float(sum(i))
+        V[state] = pr
+    return V
+
+
+#def z_est(i, x, ident, p, ccp, b, params, T):
+#    ''' Recursive caluclation of lifetime returns '''
+#    Z = []
+#    for obs in np.unique(ident):
+#        state = x[ident == obs]
+#        control = i[ident == obs]
+#        z = []
+#        z.append(u_flow(state[-1], control[-1], params))
+#        for j in range(len(state) - 1):
+#            zj = 
+#            z.insert(0, zj)
+#
+#
+#def e_est(i, x, ident, p, ccp, b, T):
+#    ''' Recursive calculation of lifetime errors '''
+
+
+def hm(d, b, guess, stateMax, stateInt, stateNum, T=10):
+    ''' Hotz and Miller's CCP method '''
+    cols = ['ident', 'time', 'x', 'i']
+    d.columns = cols
+    di = d.i
+    dx = d.x 
+    px = d.x
+    dx = dx / stateInt
+    px = px / stateInt
+    dx[0] = 0
+    px[0] = 0
+    dt = d.time
+    theta = guess
+    
+    dx = dx.diff()
+    dx = dx * (1-di)
+    dx = dx * (dt != 0)    
+    p = first_step(dx, stateNum)
+    ccp = ccp_est(px, di, stateMax, stateInt)
+    
+    vtilde = np.log(ccp) - np.log(1-ccp)
+    eOne = 0.57721 - np.log(np.exp(vtilde) / (1+np.exp(vtilde)))
+    eZero = 0.57721 - np.log(1 / (1+np.exp(vtilde)))
+       
+    return [p, ccp]
     
     
