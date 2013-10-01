@@ -1,0 +1,3 @@
+This is a series of functions written in Python for evaluating Single-Agent Dynamic Discrete Choice models of the format presented in John Rust's 1987 Econometrica article, "Optimal Replacement of GMC Bus Engines: An Empirical Model of Harold Zurcher." 
+
+Functions are available to simulate and estimate data, using either Rust's NFP algorithm or the Hotz and Miller (93) CCP method.
