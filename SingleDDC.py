@@ -5,7 +5,7 @@
                   C - October 1, 2013
     Description : Program for estimating Single Agent DDC models using:
                     - Rust NFP algorithm (Rust 87)
-                    - Hotz and Miller CCP method (Hotz and Miller 93, 
+                    - Hotz and Miller CCP method (Hotz and Miller 93,
                       Aguirregabiria and Mira 02)
 '''
 
@@ -23,11 +23,11 @@ def u_flow(y, j, params):
 def val_inner(y, params, beta, EV, replace):
     ''' Utility given next period milage '''
     if replace == 0:
-        val = (np.exp(u_flow(y, 0, params) + beta*EV[0, :]) + 
+        val = (np.exp(u_flow(y, 0, params) + beta*EV[0, :]) +
                np.exp(u_flow(y, 1, params) + beta*EV[1, :]))
     else:
-        val = ((np.exp(u_flow(y, 0, params) + beta*EV[0, 0]) + 
-               np.exp(u_flow(y, 1, params) + beta*EV[1, 0])) * 
+        val = ((np.exp(u_flow(y, 0, params) + beta*EV[0, 0]) +
+               np.exp(u_flow(y, 1, params) + beta*EV[1, 0])) *
                np.ones(y.shape))
     return np.log(val)
 
@@ -70,7 +70,7 @@ def val_iter(params, stateMax, stateInt, stateNum):
         EVTemp = np.vstack((EV1, EV2))
         EVTemp = np.dot(EVTemp, P)  # E[] over future mileage draws
         # Correct for end of value function
-        EVTemp[:, -stateNum:] = np.tile(EVTemp[:, -(stateNum + 1)], 
+        EVTemp[:, -stateNum:] = np.tile(EVTemp[:, -(stateNum + 1)],
                                         (1, stateNum))
         dif = np.amax(abs(EVTemp - EV))
         EV = EVTemp
@@ -83,7 +83,7 @@ def x_set(x, p):
     lb = 0  # Lower bound for probability interval
     count = 0
     for pr in p:
-        if x >= lb and x < lb + pr:   
+        if x >= lb and x < lb + pr:
             return count
         lb = lb + pr
         count += 1
@@ -98,9 +98,9 @@ def decision(params, stateMax, stateInt, stateNum, n, t, x, eps):
     for i in range(0, n):
         xCum = 0
         for j in range(0, t):
-            u0 = (u_flow(x[obsNum], 0, params[1:-stateNum]) + 
+            u0 = (u_flow(x[obsNum], 0, params[1:-stateNum]) +
                   eps[obsNum][0] + params[0]*EV[0, xCum])
-            u1 = (u_flow(x[obsNum], 1, params[1:-stateNum]) + 
+            u1 = (u_flow(x[obsNum], 1, params[1:-stateNum]) +
                   eps[obsNum][1] + params[0]*EV[1, 0])
             action.append((u1 >= u0)[0] * 1)
             if action[obsNum] == 1:
@@ -116,32 +116,32 @@ def rust_sim(params, stateMax, stateInt, stateNum, n, t):
     ''' Simulate Rust data '''
     p = params[-stateNum:]
     obs = n * t  # Number of observations to be simulated
-    
+
     eps = np.random.uniform(0, 1, (obs, 2))
     eps = 0.577 - np.log(-np.log(eps))  # Quantile fn. for Type 1 EV dist.
-    
+
     x = np.random.uniform(0, 1, (t, n))
     vec_set = np.vectorize(x_set)
     pArray = np.ndarray((1,), dtype=object)  # Prep for vectorized use
     pArray[0] = p
-    x = vec_set(x, pArray)    
+    x = vec_set(x, pArray)
     x = x.reshape((obs, 1), order='F')  # "Fortran order", ie. column major
-    
+
     unit = np.arange(n)
     unit = np.tile(unit, (t, 1))
     unit = unit.reshape((obs, 1), order='F')
-    
+
     time = np.arange(t)
     time = np.tile(time, (n, 1))
     time = time.reshape((obs, 1))
-    
+
     data = decision(params, stateMax, stateInt, stateNum, n, t, x, eps)
     data = np.hstack((unit, time, data))
     cols = ['ident', 'time', 'x', 'i']
     data = pd.DataFrame(data, columns=cols)
     data.x = data.x * stateInt
     return data
-    
+
 
 def first_step(dx, stateNum):
     ''' Empirical frequencies for transition matrix '''
@@ -158,8 +158,8 @@ def log_l(theta, b, dx, i, EV):
     dx = dx.astype(np.int32)
     EV1 = np.array(EV[i, dx]).reshape(-1,)  # Take out of matrix form
     EV2 = np.array(EV[(1 - i), dx]).reshape(-1,)
-    
-    ll = (np.exp(u_flow(dx, i, theta) + b*EV1) / 
+
+    ll = (np.exp(u_flow(dx, i, theta) + b*EV1) /
          (np.exp(u_flow(dx, i, theta) + b*EV1) +
           np.exp(u_flow(dx, (1 - i), theta) + b*EV2)))
     return -sum(ll)
@@ -170,31 +170,31 @@ def nfp(d, b, guess, stateMax, stateInt, stateNum):
     cols = ['ident', 'time', 'x', 'i']
     d.columns = cols
     di = d.i
-    dx = d.x 
+    dx = d.x
     dx = dx / stateInt
     dt = d.time
     theta = guess
-    
+
     dx = dx.diff()
     dx = dx * (1-di)
-    dx = dx * (dt != 0)    
+    dx = dx * (dt != 0)
     p = first_step(dx, stateNum)
-    
+
     tol = 1e-8; maxIter = 1000; dif = 1; iterNum = 0  # Iteration bounds
     while dif > tol and iterNum < maxIter:
         params = [[b], theta, p]
         params = [item for sublist in params for item in sublist]
         EV = val_iter(params, stateMax, stateInt, stateNum)
-        result = fmin_bfgs(log_l, theta, args=(b, dx, d.i, EV), 
+        result = fmin_bfgs(log_l, theta, args=(b, dx, d.i, EV),
                            maxiter=1, disp=0, full_output=True)
         theta = result[0]
         dif = max(abs(result[2]))  # Jacobian evaluated at parameters
         iterNum +=1
-    
+
     result = [theta.tolist(), p]
     result = [item for sublist in result for item in sublist]
     return result
-    
+
 
 def ccp_est(px, i, stateMax, stateInt):
     ''' Get empirical CCP '''
@@ -217,7 +217,7 @@ def ccp_est(px, i, stateMax, stateInt):
 #        z = []
 #        z.append(u_flow(state[-1], control[-1], params))
 #        for j in range(len(state) - 1):
-#            zj = 
+#            zj =
 #            z.insert(0, zj)
 #
 #
@@ -230,7 +230,7 @@ def hm(d, b, guess, stateMax, stateInt, stateNum, T=10):
     cols = ['ident', 'time', 'x', 'i']
     d.columns = cols
     di = d.i
-    dx = d.x 
+    dx = d.x
     px = d.x
     dx = dx / stateInt
     px = px / stateInt
@@ -238,17 +238,17 @@ def hm(d, b, guess, stateMax, stateInt, stateNum, T=10):
     px[0] = 0
     dt = d.time
     theta = guess
-    
+
     dx = dx.diff()
     dx = dx * (1-di)
-    dx = dx * (dt != 0)    
+    dx = dx * (dt != 0)
     p = first_step(dx, stateNum)
     ccp = ccp_est(px, di, stateMax, stateInt)
-    
+
     vtilde = np.log(ccp) - np.log(1-ccp)
     eOne = 0.57721 - np.log(np.exp(vtilde) / (1+np.exp(vtilde)))
     eZero = 0.57721 - np.log(1 / (1+np.exp(vtilde)))
-       
+
     return [p, ccp]
-    
-    
+
+
