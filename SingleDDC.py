@@ -56,13 +56,13 @@ def val_iter(params, stateMax, stateInt, stateNum):
     flowParams = params[1:-stateNum]
     K = stateMax / stateInt
     P = params[-stateNum:]  # Transition matrix
-    P = diags(P, list(xrange(stateNum)), shape=(K, K)).todense()
+    P = diags(P, np.arange(stateNum), shape=(K, K)).todense()
     P = P.T
-    r = np.array(list(xrange(K)))
+    r = np.arange(K)
     guess = np.zeros((2, K))
     EV = guess
     EVTemp = np.zeros((2, K))
-    
+
     tol = 1e-6; maxIter = 1000; dif = 1; iterNum = 0  # Iteration bounds
     while dif > tol and iterNum < maxIter:
         EV1 = val_inner(r, flowParams, beta, EV, 0)
@@ -127,11 +127,11 @@ def rust_sim(params, stateMax, stateInt, stateNum, n, t):
     x = vec_set(x, pArray)    
     x = x.reshape((obs, 1), order='F')  # "Fortran order", ie. column major
     
-    unit = np.array(list(range(n)))
+    unit = np.arange(n)
     unit = np.tile(unit, (t, 1))
     unit = unit.reshape((obs, 1), order='F')
     
-    time = np.array(list(range(t)))
+    time = np.arange(t)
     time = np.tile(time, (n, 1))
     time = time.reshape((obs, 1))
     
