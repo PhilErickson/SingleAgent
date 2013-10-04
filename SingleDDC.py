@@ -7,6 +7,13 @@
                     - Rust NFP algorithm (Rust 87)
                     - Hotz and Miller CCP method (Hotz and Miller 93,
                       Aguirregabiria and Mira 02)
+    Rust Values :
+        params = [.9999, 11.7257, 2.4569, 0.0937, 0.4475, 0.4459, 0.0127]
+        stateMax = 400000
+        stateInt = 2500
+        stateNum = 4
+        t = 100
+        n = 100        
 '''
 
 import pandas as pd
@@ -32,15 +39,6 @@ def val_inner(y, params, beta, EV, replace):
     return np.log(val)
 
 
-'''
-    Rust Values and sim numbers:
-    params = [.9999, 11.7257, 2.4569, 0.0937, 0.4475, 0.4459, 0.0127]
-    stateMax = 400000
-    stateInt = 2500
-    stateNum = 4
-    t = 100
-    n = 100
-'''
 def val_iter(params, stateMax, stateInt, stateNum):
     '''
         FN      : Rust value fn iteration proceedure
@@ -88,6 +86,7 @@ def x_set(x, p):
         lb = lb + pr
         count += 1
     return (count - 1)  # Control for precision error on complimentary prob.
+
 
 def decision(params, stateMax, stateInt, stateNum, n, t, x, eps):
     ''' Generate stopping decisions '''
@@ -208,21 +207,57 @@ def ccp_est(px, i, stateMax, stateInt):
     return V
 
 
-#def z_est(i, x, ident, p, ccp, b, params, T):
-#    ''' Recursive caluclation of lifetime returns '''
-#    Z = []
-#    for obs in np.unique(ident):
-#        state = x[ident == obs]
-#        control = i[ident == obs]
-#        z = []
-#        z.append(u_flow(state[-1], control[-1], params))
-#        for j in range(len(state) - 1):
-#            zj =
-#            z.insert(0, zj)
-#
-#
-#def e_est(i, x, ident, p, ccp, b, T):
-#    ''' Recursive calculation of lifetime errors '''
+def z_comp(x, p, ccp, b, params, T):
+    ''' Recursive calculation of lifetime returns '''
+    K = len(x)
+    P = diags(p, np.arange(len(p)), shape=(K, K)).todense()
+    P = P.T
+    CCP = np.c_[ccp, 1 - ccp].T
+
+    z0 = u_flow(x, 0, params)
+    z1 = u_flow(np.zeros(K), 1, params)
+    zP = np.c_[z0, z1].T
+    for i in range(T):
+        z0 = u_flow(x, 0, params)
+        z1 = u_flow(np.zeros(K), 1, params)
+        z = np.c_[z0, z1].T
+        zP0 = b * np.dot(np.sum(np.multiply(CCP, zP), 0), P)
+        inner = np.sum(np.multiply(CCP[:, :1], zP[:, :1]), 0)
+        zP1 = b * np.tile(inner, (1, CCP.shape[1]))
+        zP = z + b*np.r_[zP0, zP1]
+    return zP
+
+
+def e_comp(eEst, p, ccp, b, T):
+    ''' Recursive calculation of lifetime errors '''
+    K = eEst.shape[1]
+    P = diags(p, np.arange(len(p)), shape=(K, K)).todense()
+    P = P.T
+    CCP = np.c_[ccp, 1 - ccp].T
+
+    etp1 = eEst
+    etp1[1,:] = etp1[1,0]
+    eP = etp1
+    for i in range(T):
+        eP0 = b * np.dot(np.sum(np.multiply(CCP, etp1 + eP), 0), P)
+        inner = np.sum(np.multiply(CCP[:, :1], etp1[:, :1] + eP[:, :1]), 0)
+        eP1 = b * np.tile(inner, (1, CCP.shape[1]))
+        eP = np.r_[eP0, eP1]
+    return eP
+
+
+def hm_log_l(theta, x, i, r, eEst, p, ccp, b, T):
+    ''' Log-likelihood fn for CCP estimator '''
+    zP = z_comp(r, p, ccp, b, theta, T)
+    eP = e_comp(eEst, p, ccp, b, T)
+    # More efficient way to do this??
+    ll = 0
+    for obs in range(len(x)):
+        top = np.exp(zP[i[obs], x[obs]] + eP[i[obs], x[obs]])
+        bot = (np.exp(zP[0, x[obs]] + eP[0, x[obs]]) + 
+               np.exp(zP[1, x[obs]] + eP[1, x[obs]]))
+        ll = ll + np.log(top / bot)
+    return -ll
 
 
 def hm(d, b, guess, stateMax, stateInt, stateNum, T=10):
@@ -244,11 +279,21 @@ def hm(d, b, guess, stateMax, stateInt, stateNum, T=10):
     dx = dx * (dt != 0)
     p = first_step(dx, stateNum)
     ccp = ccp_est(px, di, stateMax, stateInt)
+    # Better way to deal with pr=0? 
+    ccp[ccp==0] = min(ccp[ccp!=0]) / 4
 
     vtilde = np.log(ccp) - np.log(1-ccp)
     eOne = 0.57721 - np.log(np.exp(vtilde) / (1+np.exp(vtilde)))
     eZero = 0.57721 - np.log(1 / (1+np.exp(vtilde)))
+    eEst = np.c_[eZero, eOne].T
 
-    return [p, ccp]
+    r = np.arange(stateMax / stateInt)
 
+    result = fmin_bfgs(hm_log_l, theta, args=(px, di, r, eEst, p, ccp, b, T),
+                       maxiter=1, disp=0, full_output=True)
+    theta = result[0]
+
+    result = [theta.tolist(), p]
+    result = [item for sublist in result for item in sublist]
+    return result
 
